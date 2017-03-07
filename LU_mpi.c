@@ -55,50 +55,6 @@ int main(int argc, char *argv[])
       srand(time(NULL));
       A = gen_mx(mx_size);
       /*
-      // parallelozzed - really slow
-      map = malloc(sizeof(size_t) * mx_size);
-      save_point = malloc(sizeof(size_t) * mx_size);
-      A = malloc(sizeof(float) * mx_size * mx_size);
-
-      for (i = 0; i < mx_size; i++) {
-      save_point[i] = (size_t) &A[i * mx_size];
-      map[i] = i % (p - 1) + 1;
-      }
-
-      for (i = 0; i < mx_size; i++) {
-      float buffer[mx_size + 1];
-      MPI_Sendrecv(&i, 1, MPI_INT, map[i], GENERIC_TAG, 
-      &buffer, mx_size + 1, MPI_FLOAT, map[i], MPI_ANY_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-      int from = (int) buffer[0] * mx_size;
-      //printf("buff row %p %p\n", &A[(int) buffer[0]], save_point[(int) buffer[0]]);
-      memcpy((float *) save_point[(int)buffer[0]], &buffer[1], mx_size * sizeof(float));
-      }
-      free(map);
-      free(save_point);
-      // top slave row generation
-      for (int i = 1; i < p; i++) {
-      MPI_Send(&i, 1, MPI_INT, i, END_TAG, MPI_COMM_WORLD);
-      }
-      }
-
-      while (id != root_p) {
-      int row_ref;
-      MPI_Status status;
-      MPI_Recv(&row_ref, 1, MPI_INT, root_p, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
-      if (status.MPI_TAG == END_TAG) {
-      //printf("Process %d exiting work loop.\n", id);
-      break;
-      } else {
-      float *row = gen_row_ref(mx_size, row_ref);
-      //printf("[%d] (%.0f) ", id, *row);
-      //print_mx(&row[1], mx_size, mx_size);
-      MPI_Send(row, mx_size + 1, MPI_FLOAT, root_p, 0, MPI_COMM_WORLD);
-      free(row);
-      }
-      }
-
-      if (id == root_p) {
-      /*
       printf("[A]\n");
       print_mx(A, mx_size * mx_size, mx_size);
       */
@@ -133,6 +89,7 @@ int main(int argc, char *argv[])
    int j = 0;
    for (i = mx_size; i > 1; i--) {
       int row_len = i + 1;
+      int ld = row_len * sizeof(float);
       float *root_row;
       if (id == root_p) {
          // reference of diagonal
@@ -148,42 +105,36 @@ int main(int argc, char *argv[])
        * Every slave waits assigned rows, execute forward elimination between master and recived rows,
        * save the rows and wait end signal to send back work.
        */
-      size_t *slave_work_buffer = NULL, slave_buffer_size = 0;
+      int slave_msg_size = 0;
+      float *ready_messagge = NULL;
       while (id != root_p) {
          float slave_row[row_len];
          MPI_Status status;
          MPI_Recv(&slave_row, row_len, MPI_FLOAT, root_p, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
          if (status.MPI_TAG == END_TAG) {
-            //printf("Process %d exiting work loop.\n", id);
-            int ld = row_len * sizeof(float);
-            float *message = malloc(ld * slave_buffer_size);
-            for (int k = 0; k < slave_buffer_size; k++) {
-               //printf("[%d] ", id);
-               //print_mx((float *) slave_work_buffer[k], row_len, row_len);
-               memcpy(&message[k * row_len], (float *) slave_work_buffer[k], ld);
-               free((float *) slave_work_buffer[k]);
-            }
             //printf("[%d] ", id);
-            //print_mx(message, row_len * slave_buffer_size, row_len * slave_buffer_size);
-            MPI_Send(&slave_buffer_size, 1, MPI_INT, root_p, END_TAG, MPI_COMM_WORLD);
-            if (slave_buffer_size > 0) {
-               MPI_Send(message, row_len * slave_buffer_size, MPI_FLOAT, root_p, END_TAG, MPI_COMM_WORLD);
+            //print_mx(ready_messagge, row_len * slave_msg_size, row_len * slave_msg_size);
+            MPI_Send(&slave_msg_size, 1, MPI_INT, root_p, END_TAG, MPI_COMM_WORLD);
+            if (slave_msg_size > 0) {
+               MPI_Send(ready_messagge, row_len * slave_msg_size, MPI_FLOAT, root_p, END_TAG, MPI_COMM_WORLD);
             }
-            free(slave_work_buffer);
-            free(message);
+            free(ready_messagge);
+            free(root_row);
+            //printf("Process %d exiting work loop.\n", id);
             break;
          } else {
             float *red_row = forw_elim(root_row, slave_row, i);
             red_row[row_len - 1] = slave_row[row_len - 1];
             //printf("[%d] ", id);
             //print_mx(red_row, row_len, row_len);
-            if (!slave_work_buffer) {
-               slave_work_buffer = malloc(sizeof(float *));
+            if (!slave_msg_size) {
+               ready_messagge = malloc(ld);
             } else {
-               slave_work_buffer = realloc(slave_work_buffer, sizeof(float *) * (slave_buffer_size + 1));
+               ready_messagge = realloc(ready_messagge, (slave_msg_size + 1) * ld);
             }
-            slave_work_buffer[slave_buffer_size] = (size_t) red_row;
-            slave_buffer_size++;
+            memcpy(&ready_messagge[slave_msg_size * row_len], red_row, ld);
+            slave_msg_size++;
+            free(red_row);
          }
       }
 
@@ -204,7 +155,6 @@ int main(int argc, char *argv[])
             //print_mx(work_row, row_len, row_len);
             MPI_Send(work_row, row_len, MPI_FLOAT, map[j], GENERIC_TAG, MPI_COMM_WORLD);
          }
-
 
          int msg_len, end, cpy;
          for (int end = 1; end < p; end++) {
