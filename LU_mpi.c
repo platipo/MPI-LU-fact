@@ -145,27 +145,54 @@ int main(int argc, char *argv[])
 
       /*
        * slave
+       * Every slave waits assigned rows, execute forward elimination between master and recived rows,
+       * save the rows and wait end signal to send back work.
        */
+      size_t *slave_work_buffer = NULL, slave_buffer_size = 0;
       while (id != root_p) {
          float slave_row[row_len];
          MPI_Status status;
          MPI_Recv(&slave_row, row_len, MPI_FLOAT, root_p, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
          if (status.MPI_TAG == END_TAG) {
             //printf("Process %d exiting work loop.\n", id);
+            int ld = row_len * sizeof(float);
+            float *message = malloc(ld * slave_buffer_size);
+            for (int k = 0; k < slave_buffer_size; k++) {
+               //printf("[%d] ", id);
+               //print_mx((float *) slave_work_buffer[k], row_len, row_len);
+               memcpy(&message[k * row_len], (float *) slave_work_buffer[k], ld);
+               free((float *) slave_work_buffer[k]);
+            }
+            //printf("[%d] ", id);
+            //print_mx(message, row_len * slave_buffer_size, row_len * slave_buffer_size);
+            MPI_Send(&slave_buffer_size, 1, MPI_INT, root_p, END_TAG, MPI_COMM_WORLD);
+            if (slave_buffer_size > 0) {
+               MPI_Send(message, row_len * slave_buffer_size, MPI_FLOAT, root_p, END_TAG, MPI_COMM_WORLD);
+            }
+            free(slave_work_buffer);
+            free(message);
             break;
          } else {
             float *red_row = forw_elim(root_row, slave_row, i);
-            //red_row = realloc(red_row, row_len);
             red_row[row_len - 1] = slave_row[row_len - 1];
             //printf("[%d] ", id);
             //print_mx(red_row, row_len, row_len);
-            MPI_Send(red_row, row_len, MPI_FLOAT, root_p, 0, MPI_COMM_WORLD);
-            free(red_row);
+            if (!slave_work_buffer) {
+               slave_work_buffer = malloc(sizeof(float *));
+            } else {
+               slave_work_buffer = realloc(slave_work_buffer, sizeof(float *) * (slave_buffer_size + 1));
+            }
+            slave_work_buffer[slave_buffer_size] = (size_t) red_row;
+            slave_buffer_size++;
          }
       }
 
       /*
        * MASTER
+       * At beginning master process send at each slave the mapped row. When it reaches last matrix
+       * row it sends to all slaves and "empty message" with end tag waiting till they send back
+       * two messagges: the former contains the number of the rows reduced and the latter
+       * concatenated rows.
        */
       if (id == root_p) {
          int h; 
@@ -175,32 +202,44 @@ int main(int argc, char *argv[])
             memcpy(work_row, (float *) save_point[j], i * sizeof(float));
             //printf("%d diag: %f\n", j, *root_row);
             //print_mx(work_row, row_len, row_len);
-            MPI_Sendrecv(work_row, row_len, MPI_FLOAT, map[j], GENERIC_TAG, 
-                  work_row, row_len, MPI_FLOAT, map[j], MPI_ANY_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-            //print_mx(work_row, row_len, row_len);
-            memcpy((float *) save_point[(int) work_row[row_len - 1]], work_row, i * sizeof(float));
+            MPI_Send(work_row, row_len, MPI_FLOAT, map[j], GENERIC_TAG, MPI_COMM_WORLD);
          }
 
 
-         for (int i = 1; i < p; i++) {
-            MPI_Send(A, row_len, MPI_FLOAT, i, END_TAG, MPI_COMM_WORLD);
+         int msg_len, end, cpy;
+         for (int end = 1; end < p; end++) {
+            MPI_Send(A, row_len, MPI_FLOAT, end, END_TAG, MPI_COMM_WORLD);
+            MPI_Recv(&msg_len, 1, MPI_INT, end, MPI_ANY_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            if (msg_len > 0) {
+               int buff_size = row_len * msg_len;
+               float *msg_buffer = malloc(sizeof(float) * buff_size);
+               MPI_Recv(msg_buffer, buff_size, MPI_FLOAT, end, MPI_ANY_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+               //printf("[%d] ", i);
+               //print_mx(msg_buffer, buff_size, buff_size);
+               for (cpy = 0; cpy < msg_len; cpy++) {
+                  int save_index = msg_buffer[(cpy * row_len) + (row_len - 1)];
+                  memcpy((float *) save_point[save_index], &msg_buffer[row_len * cpy], i * sizeof(float));
+               }
+               free(msg_buffer);
+            }
          }
       }
-
       MPI_Barrier(MPI_COMM_WORLD);
    }
-   double end = MPI_Wtime();
 
+   double end = MPI_Wtime();
 
    if (id == root_p) {
       printf("mpi: %f s\n", end - start);
       /*
+         printf("[A]\n");
+         print_mx(A, mx_size * mx_size, mx_size);
          printf("\n[L]\n");
          L_print(A, mx_size);
          printf("\n[U]\n");
          U_print(A, mx_size);
          free(A);
-         */
+      */
    }
 
    MPI_Finalize();
