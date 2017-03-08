@@ -4,17 +4,28 @@ PAR=LU_mpi.c
 EX_PAR=par.out
 SEQ=LU_seq.c
 EX_SEQ=seq.out
-SAMPLE=100
+ifdef N
+  SAMPLE:=$(N)
+else
+  SAMPLE=14
+endif
+PRINT_ALU := $(shell if [[ ${SAMPLE} -le 15 ]]; then echo -DALU; fi)
 
-default: sequential mpi
+default: seq mpi
 
-sequential: $(SEQ)
-	$(CC) $(SEQ) -o $(EX_SEQ)
+.PHONY: seq mpi clean
+
+$(EX_SEQ): $(SEQ)
+	$(CC) $(SEQ) $(PRINT_ALU) -o $(EX_SEQ)
+
+$(EX_PAR): $(PAR)
+	$(MPI) $(PAR) $(PRINT_ALU) -o $(EX_PAR)
+
+mpi: $(EX_PAR) 
+	mpirun -np 4 ./$(EX_PAR) $(SAMPLE)
+
+seq: $(EX_SEQ)
 	./$(EX_SEQ) $(SAMPLE)
-
-mpi: $(PAR)
-	$(MPI) $(PAR) -o $(EX_PAR)
-	mpirun -np 5 ./$(EX_PAR) $(SAMPLE)
 
 clean:
 	$(RM) -f *.out
