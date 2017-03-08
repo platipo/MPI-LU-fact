@@ -4,7 +4,7 @@ PAR=LU_mpi.c
 EX_PAR=par.out
 SEQ=LU_seq.c
 EX_SEQ=seq.out
-SAMPLE=100
+SAMPLE=10
 
 default: sequential mpi
 
@@ -14,7 +14,7 @@ sequential: $(SEQ)
 
 mpi: $(PAR)
 	$(MPI) $(PAR) -o $(EX_PAR)
-	mpirun -np 5 ./$(EX_PAR) $(SAMPLE)
+	mpirun -np 4 ./$(EX_PAR) $(SAMPLE)
 
 clean:
 	$(RM) -f *.out

@@ -65,20 +65,31 @@ int main(int argc, char *argv[])
     */
    if (id == root_p) {
       // all LU decomposiztion last mx_size * (mx_size - 1) / 2
-      int steps = mx_size * (mx_size - 1) / 2;
+      //int steps = mx_size * (mx_size - 1) / 2;
       //printf("st %d\n", steps);
-      map = malloc(sizeof(size_t) * steps);
-      save_point = malloc(sizeof(size_t) * steps);
 
-      // compute save_points and map
-      int g = 0; // counter
-      for (i = 0; i < mx_size; i++) {
-         int j;
-         for (j = i + 1; j < mx_size; j++, g++) {
-            save_point[g] = (size_t) &A[j * mx_size + i];
-            map[g] = g % (p - 1) + 1;
-            //printf("%d  %d  %d  %f\n", j, i, g, A[j * mx_size + i]);
-            //printf("%d  %d  %d  %f\n", j, i, g, *((float *) save_point[g]));
+      /*
+       * To distriubure more efficiently the load, instead of computing segmented rows,
+       * it's better to send continuos row block like
+       * https://github.com/puneetar/Parallel-LU-Factorization-with-OpenMP-MPI/blob/master/MPI/MPI.c#L52
+       */
+      int tmp_size = mx_size - 1, p_no_root = p - 1, g = 0; // counter
+      map = malloc(sizeof(size_t) * tmp_size * p_no_root);
+      save_point = malloc(sizeof(size_t) * tmp_size * p_no_root);
+      for (i = 0; i < tmp_size; i++) {
+         int j_p, split_work = tmp_size - i ;
+         for (j_p = 0; j_p < p_no_root; j_p++, g++) {
+            map[g] = split_work / (p_no_root - j_p);
+            /*
+               printf("step:%d p:%d rows:%d\n", g, j_p + 1, map[g]);
+               if (map[g] > 0) {
+               save_point[g] = (size_t) &A[(mx_size - split_work) * mx_size + i];
+               } else {
+               ln();
+               }
+            */
+            split_work -= map[g];
+
          }
       }
    }
@@ -86,7 +97,7 @@ int main(int argc, char *argv[])
    MPI_Barrier(MPI_COMM_WORLD);
    double start = MPI_Wtime();
 
-   int j = 0;
+   int g = 0; // counter
    for (i = mx_size; i > 1; i--) {
       int row_len = i + 1;
       int ld = row_len * sizeof(float);
@@ -101,16 +112,22 @@ int main(int argc, char *argv[])
       MPI_Bcast(root_row, i, MPI_FLOAT, root_p, MPI_COMM_WORLD);
 
       /*
-       * slave
+       * Worker
        * Every slave waits assigned rows, execute forward elimination between master and recived rows,
        * save the rows and wait end signal to send back work.
        */
       int slave_msg_size = 0;
       float *ready_messagge = NULL;
-      while (id != root_p) {
-         float slave_row[row_len];
+      if (id != root_p) {
          MPI_Status status;
-         MPI_Recv(&slave_row, row_len, MPI_FLOAT, root_p, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
+         //float slave_row[row_len];
+         //MPI_Recv(&slave_row, row_len, MPI_FLOAT, root_p, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
+         int workload;
+         MPI_Recv(&workload, 1, MPI_INT, root_p, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
+         if (workload > 0) {
+            printf("[%d] work %d\n", id, workload);
+         }
+            /*
          if (status.MPI_TAG == END_TAG) {
             //printf("[%d] ", id);
             //print_mx(ready_messagge, row_len * slave_msg_size, row_len * slave_msg_size);
@@ -123,6 +140,8 @@ int main(int argc, char *argv[])
             //printf("Process %d exiting work loop.\n", id);
             break;
          } else {
+            */
+            /*
             float *red_row = forw_elim(root_row, slave_row, i);
             red_row[row_len - 1] = slave_row[row_len - 1];
             //printf("[%d] ", id);
@@ -136,17 +155,23 @@ int main(int argc, char *argv[])
             slave_msg_size++;
             free(red_row);
          }
+            */
       }
 
       /*
-       * MASTER
+       * Coordinator
        * At beginning master process send at each slave the mapped row. When it reaches last matrix
        * row it sends to all slaves and "empty message" with end tag waiting till they send back
        * two messagges: the former contains the number of the rows reduced and the latter
        * concatenated rows.
        */
-      if (id == root_p) {
-         int h; 
+      else {
+         int i_p;
+         for (i_p = 1; i_p < p; i_p++, g++) {
+            //printf("=>[%d] work %d\n", i_p, map[g]);
+            MPI_Send(&map[g], 1, MPI_INT, i_p, GENERIC_TAG, MPI_COMM_WORLD);
+
+         /*
          for (h = 0; h < i - 1; h++, j++) {
             float work_row[row_len];
             work_row[row_len - 1] = j;
@@ -172,6 +197,7 @@ int main(int argc, char *argv[])
                }
                free(msg_buffer);
             }
+         */
          }
       }
       MPI_Barrier(MPI_COMM_WORLD);
@@ -189,7 +215,7 @@ int main(int argc, char *argv[])
          printf("\n[U]\n");
          U_print(A, mx_size);
          free(A);
-      */
+         */
    }
 
    MPI_Finalize();
