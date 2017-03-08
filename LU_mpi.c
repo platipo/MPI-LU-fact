@@ -36,8 +36,8 @@ int main(int argc, char *argv[])
 
    if (p < 2) {
       perror("Too few workers, minimum 2\n");
-      MPI_Finalize();
-      return EXIT_SUCCESS;
+      MPI_Abort(MPI_COMM_WORLD, 0);
+      return EXIT_FAILURE;
    }
 
    /*
@@ -54,10 +54,10 @@ int main(int argc, char *argv[])
    if (id == root_p) {
       srand(time(NULL));
       A = gen_mx(mx_size);
-      /*
+      #ifdef ALU
       printf("[A]\n");
       print_mx(A, mx_size * mx_size, mx_size);
-      */
+      #endif
    }
 
    /*
@@ -132,7 +132,7 @@ int main(int argc, char *argv[])
             } else {
                ready_messagge = realloc(ready_messagge, (slave_msg_size + 1) * ld);
             }
-            memcpy(&ready_messagge[slave_msg_size * row_len], red_row, ld);
+            memmove(&ready_messagge[slave_msg_size * row_len], red_row, ld);
             slave_msg_size++;
             free(red_row);
          }
@@ -174,22 +174,24 @@ int main(int argc, char *argv[])
             }
          }
       }
-      MPI_Barrier(MPI_COMM_WORLD);
+      //MPI_Barrier(MPI_COMM_WORLD);
    }
 
    double end = MPI_Wtime();
 
    if (id == root_p) {
-      printf("mpi: %f s\n", end - start);
       /*
-         printf("[A]\n");
+         printf("[LU]\n");
          print_mx(A, mx_size * mx_size, mx_size);
-         printf("\n[L]\n");
-         L_print(A, mx_size);
-         printf("\n[U]\n");
-         U_print(A, mx_size);
-         free(A);
       */
+      #ifdef ALU
+      printf("\n[L]\n");
+      L_print(A, mx_size);
+      printf("\n[U]\n");
+      U_print(A, mx_size);
+      #endif
+      free(A);
+      printf("mpi: %f s\n", end - start);
    }
 
    MPI_Finalize();
