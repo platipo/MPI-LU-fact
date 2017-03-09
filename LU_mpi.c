@@ -96,6 +96,7 @@ int main(int argc, char *argv[])
    }
 
    MPI_Barrier(MPI_COMM_WORLD);
+   MPI_Request no_block;
    double start = MPI_Wtime();
 
    int g = 0; // counter
@@ -121,20 +122,24 @@ int main(int argc, char *argv[])
       if (id != root_p) {
          MPI_Status status;
          int workload;
-         MPI_Recv(&workload, 1, MPI_INT, root_p, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
+         MPI_Recv(&workload, 1, MPI_INT, root_p, MPI_ANY_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
          if (workload > 0) {
             int worker_elem = i * workload;
             //printf("[%d] work %d\n", id, workload);
             float mailbox[worker_elem];
-            MPI_Recv(&mailbox, worker_elem, MPI_FLOAT, root_p, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
+            MPI_Recv(&mailbox, worker_elem, MPI_FLOAT, root_p, MPI_ANY_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
             //print_mx(&mailbox[0], workload * i, i);
             int h;
             for (h = 0; h < workload; h++) {
                float *tmp_forw_elim = forw_elim(root_row, &mailbox[h * i], i);
-               memmove(&mailbox[h * i], tmp_forw_elim, i * sizeof(float));
+               memmove(&mailbox[h * i], tmp_forw_elim, ld);
                free(tmp_forw_elim);
             }
-            MPI_Send(&mailbox, workload * i, MPI_FLOAT, root_p, GENERIC_TAG, MPI_COMM_WORLD);
+            // waits if previous message is not already sent
+            if (i != mx_size) {
+               MPI_Wait(&no_block, &status);
+            }
+            MPI_Issend(&mailbox, worker_elem, MPI_FLOAT, root_p, GENERIC_TAG, MPI_COMM_WORLD, &no_block);
          }
       }
 
@@ -147,17 +152,31 @@ int main(int argc, char *argv[])
        */
       else {
          int ip;
-         for (ip = 0; ip < p - 1; ip++, g++) {
+         MPI_Status status;
+         for (ip = 0; ip < p - 1; ip++) {
             //printf("=>[%d] work %d\n", ip + 1, smap[mx_size - i][ip].n_rows);
             MPI_Send(&smap[mx_size - i][ip].n_rows, 1, MPI_INT, ip + 1, GENERIC_TAG, MPI_COMM_WORLD);
             if (smap[mx_size - i][ip].n_rows > 0) {
                int r, coord_elem = i * smap[mx_size - i][ip].n_rows;
                float wraped_rows[coord_elem];
-               for (r = 0; r < smap[mx_size - i][ip].n_rows; r++) {
-                  memmove(&wraped_rows[r * i], (float *) smap[mx_size - i][ip].cell[r], ld);
+               // taking advantage of actual contiguous rows
+               if (i == mx_size) {
+                  memmove(&wraped_rows[0], (float *) smap[mx_size - i][ip].cell[0], coord_elem * sizeof(float));
+               } else {
+                  for (r = 0; r < smap[mx_size - i][ip].n_rows; r++) {
+                     memmove(&wraped_rows[r * i], (float *) smap[mx_size - i][ip].cell[r], ld);
+                  }
+                  MPI_Wait(&no_block, &status);
                }
                //print_mx(wraped_rows, smap[mx_size - i][ip].n_rows * i, i);
-               MPI_Send(&wraped_rows, coord_elem, MPI_FLOAT, ip + 1, GENERIC_TAG, MPI_COMM_WORLD);
+               MPI_Issend(&wraped_rows, coord_elem, MPI_FLOAT, ip + 1, GENERIC_TAG, MPI_COMM_WORLD, &no_block);
+            }
+         }
+         // splited send and recieve
+         for (ip = 0; ip < p - 1; ip++) {
+            if (smap[mx_size - i][ip].n_rows > 0) {
+               int r, coord_elem = i * smap[mx_size - i][ip].n_rows;
+               float wraped_rows[coord_elem];
                MPI_Recv(&wraped_rows, coord_elem, MPI_FLOAT, ip + 1, MPI_ANY_TAG, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
                //print_mx(wraped_rows, smap[mx_size - i][ip].n_rows * i, i);
                for (r = 0; r < smap[mx_size - i][ip].n_rows; r++) {
