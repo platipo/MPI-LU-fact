@@ -7,11 +7,6 @@
 #define ln() putchar('\n')
 #define GENERIC_TAG (0)
 
-typedef struct {
-   size_t n_rows;
-   size_t *cell;
-} column_step;
-
 float *gen_mx (size_t dim);
 float *gen_row(size_t dim);
 float *gen_row_ref (size_t dim, size_t ref);

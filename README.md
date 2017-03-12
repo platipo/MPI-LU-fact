@@ -54,13 +54,7 @@ END FOR
 
 ### Part two: parallel
 
-The parallel implementation was tougher than expected, in fact it took me two days only to understand the MPI inner working.
-
-The idea that stands behind the algorithm is a master-slaves concept. 
-
-Indeed there is a coordinator, process 0, that divides and distributes the rows to the workers, waits the forward elimination processing, gets back rows and copy them in the original position.
-
-On the other hand the worker receives rows untill end signal arrives, decompose each row, "wraps" rows in a single message and send back to the master process.
+The parallel implementation was tougher than expected, in fact it took me two days only to understand the MPI inner working. I left [below](#Useful-resources) some links I found critical to deepen my MPI knowledge.
 
 Some notes on matrix A:
 
@@ -75,6 +69,32 @@ Some notes on matrix A:
       l l l l l u u
       l l l l l l u 
 ```
+
+#### [v1](https://github.com/platipo/MPI-LU-fact/releases/tag/v1.0)
+
+The idea that stands behind the algorithm is a master-slaves mechanism.
+
+Indeed there is a coordinator, process 0, that splits work distribution among other processes and saves it.
+Master divistribute the row j to the worker ``j % (proc num - 1) + 1``, that generates numbers from 1 to num proc because 0 coordinates only. 
+After sending last row coordinator forward to each worker an "empty message" with end tag and copy recived rows in the original position (each row length is increased by one to store row number in the end).
+
+On the other hand the worker receives load, decompose each row, "wraps" rows in a single message the work done and send it back to the master process when recives end tag message.
+
+Of course this isn't the best implementation because master sends too many messages, one for each "raw" row.
+
+#### [v2](https://github.com/platipo/MPI-LU-fact/releases/tag/v1.1)
+
+Save idea behind [v1](https://github.com/platipo/MPI-LU-fact/releases/tag/v1.0) but in this implementation wrapping more rows together to lower messagges is a key strength.
+As matter of fact master process evaluate for each column step which rows will be assigned to which worker and store their pointers. Therefore coordinator takes advantage of the previous abstraction to creates bigger messagges with multiple contiguous rows and send them to workers.
+
+Slaves remain fundamentally unchanged.
+
+Not sure, but non blocking calls seems to be a problem in really big matrices (need more testing).
+
+#### [v3](https://github.com/platipo/MPI-LU-fact/releases/tag/v1.2)
+
+Third implementation diverges from first two, expecially because there is no master, all processes are peer workers.
+Every process starts with a clone of the original matrix and rows are decomposed by ``j % proc`` process. Finished the column every process updates the others by broadcasting their work row by row.
 
 ### Useful resources
 
